@@ -47,13 +47,60 @@ Then verify:
 - Migration file is included in the PR
 - If tables are altered, the service user must have ownership of those tables
 
+## Helm Chart Completeness
+
+### Rule 5: New Helm chart must include service.yaml
+
+If the PR creates or modifies a Helm chart (`helm/*/`), verify that `templates/service.yaml` exists. Without it, the pod runs but has no Kubernetes DNS routing — other services cannot reach it.
+
+Required templates for any service:
+- `templates/deployment.yaml`
+- `templates/service.yaml`
+- `templates/secret.yaml`
+
+### Rule 6: Helm values secrets must never contain real credentials
+
+If the PR modifies `values-dev.yaml` or `values-test.yaml`, verify that `secrets.*` entries contain only placeholders like `LOCAL_DEV_ONLY` or `PLACEHOLDER` — never real passwords. Real secrets are injected by CI/CD via `HELM_SECRETS`.
+
+## Infrastructure Package Rules
+
+### Rule 7: No duplicate authentication registration
+
+If the service uses `AddGranitInfrastructure(configuration)` or `AddCommonInfrastructure(configuration)`, it MUST NOT also manually register JWT Bearer authentication (`AddAuthentication().AddJwtBearer()`). This causes "Scheme already exists: Bearer" crash at startup.
+
+### Rule 8: Authentication config section naming
+
+`AddGranitInfrastructure` expects config under `Authentication:AuthService:*` (Issuer, Audience, SigningKey). If the PR uses `Authentication:Jwt:*` instead, flag it — the service will fail to register `ICurrentUserService`.
+
+## Resource & Performance Rules
+
+### Rule 9: Memory requests vs actual usage
+
+If the PR modifies Kubernetes resource requests/limits in `values-*.yaml`:
+- Memory `requests` MUST be higher than the service's actual idle memory footprint
+- .NET services typically use 150-300Mi at idle — setting `requests: 128Mi` causes HPA to over-scale
+- CPU-based HPA is preferred for .NET services (not memory-based) because .NET has high baseline memory usage
+
+### Rule 10: HPA configuration sanity
+
+If HPA is enabled in values:
+- `targetCPUUtilizationPercentage` should be 60-80% (not 50% — too aggressive for .NET)
+- Memory-based HPA (`targetMemoryUtilizationPercentage`) should generally NOT be used for .NET services
+- `minReplicas` should be at least 2 for TEST environment
+
 ## Code Quality Rules
 
-### Startup validation completeness
-If the PR adds validation for one config section, check that ALL sub-properties used in the code are also validated at startup. Partial validation leads to runtime errors instead of fast startup failures.
+### Rule 11: Startup validation completeness
+If the PR adds validation for one config section (e.g., `Services:Conversation`), check that ALL sub-properties used in the code are also validated at startup. Partial validation leads to runtime errors instead of fast startup failures.
 
-### appsettings.json consistency
+### Rule 12: appsettings.json consistency
 If a new config section is added to code, verify it also has a default/empty entry in `appsettings.json` for documentation purposes.
 
-### File encoding
-All files MUST be UTF-8 without BOM. Flag any file with BOM character (U+FEFF).
+### Rule 13: File encoding
+All files MUST be UTF-8 without BOM. Flag any file with BOM character (U+FEFF). BOM breaks YAML parsers, Git diffs, and CI/CD workflows.
+
+### Rule 14: Database naming convention
+All Granit services use `UseSnakeCaseNamingConvention()`. If the PR adds new entities or migrations:
+- Table names must be snake_case (e.g., `user_personal_data`, not `UserPersonalData`)
+- Column names must be snake_case
+- `__EFMigrationsHistory` columns are `migration_id`, `product_version` (snake_case)
